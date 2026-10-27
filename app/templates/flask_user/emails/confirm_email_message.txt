@@ -1,0 +1,8 @@
+Confirm your Nexus Universe account email address.
+
+Hello,
+
+Please confirm your email address by visiting this link:
+{{ confirm_email_link }}
+
+If you didn’t request this, ignore this email.
