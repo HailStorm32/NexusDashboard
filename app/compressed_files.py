@@ -5,7 +5,8 @@ or from a content hash for in-memory data) plus Last-Modified where available,
 and honour conditional requests so repeat visits get cheap 304 responses.
 
 When the client accepts gzip and ``COMPRESS_MODEL_RESPONSES`` is enabled the
-body is gzip encoded. With ``CACHE_COMPRESSED_MODELS`` enabled a ``.gz`` copy is
+body is gzip encoded. With ``CACHE_COMPRESSED_MODELS`` enabled a ``.gz``
+copy is
 stored on disk (regenerated whenever the source is newer) so no CPU is spent
 per request; otherwise the body is compressed in memory at a fast level.
 """
@@ -68,7 +69,9 @@ def _ensure_gz(path, src_stat):
     with open(path, "rb") as src:
         data = gzip.compress(src.read(), compresslevel=STORED_LEVEL, mtime=0)
     # write atomically so concurrent workers never serve a partial file
-    fd, tmp = tempfile.mkstemp(dir=gz_path.parent, prefix=".tmp-", suffix=".gz")
+    fd, tmp = tempfile.mkstemp(
+        dir=gz_path.parent, prefix=".tmp-", suffix=".gz"
+    )
     try:
         with os.fdopen(fd, "wb") as out:
             out.write(data)
@@ -119,7 +122,10 @@ def _finish(response, etag, last_modified, cache_control, vary):
 def _not_modified(etag, last_modified, cache_control, vary, mimetype):
     """Answer a matching conditional request without reading/compressing."""
     if etag in request.if_none_match:
-        return _finish(Response(status=304, mimetype=mimetype), etag, last_modified, cache_control, vary)
+        return _finish(
+            Response(status=304, mimetype=mimetype),
+            etag, last_modified, cache_control, vary
+        )
     return None
 
 
@@ -135,14 +141,19 @@ def serve_file(path, mimetype, cache_control, user_independent=False):
     # absolute: send_file resolves relative paths against the app package
     path = pathlib.Path(path).resolve()
     if mimetype is None:
-        mimetype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        mimetype = (
+            mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        )
     st = path.stat()
     base_etag = f"{st.st_mtime_ns:x}-{st.st_size:x}"
     last_modified = datetime.fromtimestamp(int(st.st_mtime), tz=timezone.utc)
     vary = _compression_enabled()
 
     if not _client_accepts_gzip():
-        response = send_file(path, mimetype=mimetype, etag=base_etag, last_modified=last_modified, conditional=True)
+        response = send_file(
+            path, mimetype=mimetype, etag=base_etag,
+            last_modified=last_modified, conditional=True
+        )
         response.headers["Cache-Control"] = cache_control
         if vary:
             response.vary.add("Accept-Encoding")
@@ -155,14 +166,19 @@ def serve_file(path, mimetype, cache_control, user_independent=False):
 
     if _store_compressed():
         gz_path = _ensure_gz(path, st)
-        response = send_file(gz_path, mimetype=mimetype, etag=etag, last_modified=last_modified, conditional=True)
+        response = send_file(
+            gz_path, mimetype=mimetype, etag=etag,
+            last_modified=last_modified, conditional=True
+        )
         response.headers["Cache-Control"] = cache_control
         response.headers["Content-Encoding"] = "gzip"
         response.vary.add("Accept-Encoding")
         return response
 
     with open(path, "rb") as src:
-        data = gzip.compress(src.read(), compresslevel=ON_THE_FLY_LEVEL, mtime=0)
+        data = gzip.compress(
+            src.read(), compresslevel=ON_THE_FLY_LEVEL, mtime=0
+        )
     response = Response(data, mimetype=mimetype)
     response.headers["Content-Encoding"] = "gzip"
     return _finish(response, etag, last_modified, cache_control, vary)
@@ -176,7 +192,9 @@ def serve_bytes(data, mimetype, cache_control, etag_seed=None):
     """
     if isinstance(data, str):
         data = data.encode()
-    base_etag = hashlib.sha1(etag_seed if etag_seed is not None else data).hexdigest()
+    base_etag = hashlib.sha1(
+        etag_seed if etag_seed is not None else data
+    ).hexdigest()
     vary = _compression_enabled()
     gz = _client_accepts_gzip()
     etag = base_etag + ("-gz" if gz else "")
@@ -185,7 +203,9 @@ def serve_bytes(data, mimetype, cache_control, etag_seed=None):
     if early is not None:
         return early
 
-    response = Response(gzip.compress(data, compresslevel=ON_THE_FLY_LEVEL, mtime=0) if gz else data, mimetype=mimetype)
+    if gz:
+        data = gzip.compress(data, compresslevel=ON_THE_FLY_LEVEL, mtime=0)
+    response = Response(data, mimetype=mimetype)
     if gz:
         response.headers["Content-Encoding"] = "gzip"
     return _finish(response, etag, None, cache_control, vary)

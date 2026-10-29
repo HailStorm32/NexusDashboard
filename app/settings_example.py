@@ -82,3 +82,12 @@ COMPRESS_MODEL_RESPONSES = True
 # When False, responses are compressed in memory on every request at a fast
 # compression level and nothing extra is stored.
 CACHE_COMPRESSED_MODELS = False
+
+# Property model viewer redraw while models are loading
+# 'none': do not redraw as individual models finish loading; draw once when
+# all loads have completed (or failed), then only on camera move/resize.
+# 'interval': redraw at most every PROPERTY_VIEWER_REDRAW_INTERVAL_MS while
+# loading so models appear progressively, then a final draw.
+# Can be overridden per page for testing with ?redraw=none|interval&redraw_ms=N
+PROPERTY_VIEWER_LOAD_REDRAW = 'none'
+PROPERTY_VIEWER_REDRAW_INTERVAL_MS = 500

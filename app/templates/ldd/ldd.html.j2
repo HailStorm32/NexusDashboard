@@ -1098,7 +1098,7 @@
 
   const onError = function (error) {
     console.log(error)
-    requestRender()
+    loadProgressRender()
    };
 
   // Render on demand: only draw when something changed (a load finished,
@@ -1113,8 +1113,43 @@
     })
   }
 
-  // Shared by the model/texture loaders so finished loads trigger a render
-  const loadingManager = new THREE.LoadingManager(requestRender, requestRender, requestRender)
+  // Redraw behaviour while models are still loading (PROPERTY_VIEWER_LOAD_REDRAW):
+  //   'none'     - do not redraw for finished loads; draw once when everything is done
+  //   'interval' - redraw at most every PROPERTY_VIEWER_REDRAW_INTERVAL_MS while loading
+  // Camera moves and resizes always redraw. The final draw also happens when loads fail.
+  const loadRedraw = {{ load_redraw|default('none')|tojson }}
+  const redrawIntervalMs = {{ redraw_interval_ms|default(500)|int }}
+  let modelsLoading = true
+  let lastLoadRender = 0
+  let loadRenderTimer = null
+  const loadingIndicator = document.createElement('div')
+  loadingIndicator.textContent = 'Loading models...'
+  loadingIndicator.style.cssText = 'position:fixed;top:8px;left:8px;padding:4px 8px;background:rgba(0,0,0,0.6);color:#fff;font:14px sans-serif;border-radius:4px;z-index:10'
+  document.body.appendChild(loadingIndicator)
+
+  function loadProgressRender() {
+    if (!modelsLoading) return requestRender()
+    if (loadRedraw !== 'interval' || loadRenderTimer) return
+    let wait = Math.max(0, lastLoadRender + redrawIntervalMs - performance.now())
+    loadRenderTimer = setTimeout(function () {
+      loadRenderTimer = null
+      lastLoadRender = performance.now()
+      requestRender()
+    }, wait)
+  }
+
+  function loadsFinished() {
+    modelsLoading = false
+    if (loadRenderTimer) { clearTimeout(loadRenderTimer); loadRenderTimer = null }
+    loadingIndicator.style.display = 'none'
+    requestRender()
+  }
+
+  // Shared by the model/texture loaders; onLoad fires once all queued items
+  // (successful or failed) have finished.
+  let loadsStarted = false
+  const loadingManager = new THREE.LoadingManager(loadsFinished, loadProgressRender, loadProgressRender)
+  loadingManager.onStart = function () { loadsStarted = true; modelsLoading = true; loadingIndicator.style.display = '' }
 
   // Load in pre-built models
   let obj_file_list = [
@@ -1152,7 +1187,7 @@
 
             scene.add( newModel );
           };
-          requestRender()
+          loadProgressRender()
         }, onProgress, onError );
     });
   }
@@ -1224,6 +1259,8 @@
     requestRender()
   })
 
+  // Nothing to fetch (e.g. only brick-built models, which load synchronously)
+  if (!loadsStarted) loadsFinished()
   requestRender();
 </script>
 

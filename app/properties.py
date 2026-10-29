@@ -306,8 +306,28 @@ def view_model(id, lod):
     return render_template(
         'ldd/ldd.html.j2',
         content=formatted_data,
-        lod=lod
+        lod=lod,
+        **viewer_redraw_options()
     )
+
+
+def viewer_redraw_options():
+    """Redraw-while-loading settings for the model viewer template.
+
+    ?redraw=none|interval and ?redraw_ms=N override the config for testing.
+    """
+    config = current_app.config
+    mode = request.args.get(
+        "redraw", config.get("PROPERTY_VIEWER_LOAD_REDRAW", "none")
+    )
+    if mode not in ("none", "interval"):
+        mode = "none"
+    interval = config.get("PROPERTY_VIEWER_REDRAW_INTERVAL_MS", 500)
+    try:
+        interval = max(int(request.args.get("redraw_ms", interval)), 16)
+    except ValueError:
+        pass
+    return {"load_redraw": mode, "redraw_interval_ms": interval}
 
 
 property_center = {
@@ -369,7 +389,8 @@ def view_models(id, lod):
         property_data=property_data,
         content=consolidated_list,
         center=property_center[property_data.zone_id],
-        lod=lod
+        lod=lod,
+        **viewer_redraw_options()
     )
 
 
@@ -385,7 +406,8 @@ def get_model(id, file_format, lod):
     if content.lot == 14:  # ugc model
         ugc_data = UGC.query.filter(UGC.id == content.ugc_id).first()
         return serve_bytes(
-            decompress(ugc_data.lxfml), 'text/xml', cache_control, etag_seed=ugc_data.lxfml
+            decompress(ugc_data.lxfml), 'text/xml', cache_control,
+            etag_seed=ugc_data.lxfml
         )
     else:  # prebuilt model
         path = prebuilt_path(content, file_format, lod)

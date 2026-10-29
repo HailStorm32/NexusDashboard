@@ -368,11 +368,24 @@ def register_settings(app):
     )
 
     # Property model viewer compression (see settings_example.py)
-    for key, default in (("COMPRESS_MODEL_RESPONSES", True), ("CACHE_COMPRESSED_MODELS", False)):
+    for key, default in (
+        ("COMPRESS_MODEL_RESPONSES", True), ("CACHE_COMPRESSED_MODELS", False)
+    ):
         value = os.getenv(key, app.config.get(key, default))
         if isinstance(value, str):
             value = value.strip().lower() in ("1", "true", "yes", "on")
         app.config[key] = bool(value)
+
+    # Property model viewer redraw while models load (see settings_example.py)
+    key = "PROPERTY_VIEWER_LOAD_REDRAW"
+    redraw = str(os.getenv(key, app.config.get(key, "none"))).strip().lower()
+    app.config[key] = redraw if redraw in ("none", "interval") else "none"
+    key = "PROPERTY_VIEWER_REDRAW_INTERVAL_MS"
+    try:
+        interval = int(os.getenv(key, app.config.get(key, 500)))
+    except (TypeError, ValueError):
+        interval = 500
+    app.config[key] = max(interval, 16)
 
     if "CLIENT_LOCATION" not in app.config:
         app.config['CLIENT_LOCATION'] = 'app/luclient/'

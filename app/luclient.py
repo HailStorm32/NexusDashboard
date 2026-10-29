@@ -165,9 +165,12 @@ def dir_listing(req_path):
 
     # Check if path is a file and serve
     if rel_path.is_file():
-        # Thousands of small, effectively immutable brick primitives are fetched
+        # Thousands of small, effectively immutable brick primitives are
+        # fetched
         # per viewer load; a modest max-age avoids a 304 round trip for each.
-        return serve_file(rel_path, None, "private, max-age=86400", user_independent=True)
+        return serve_file(
+            rel_path, None, "private, max-age=86400", user_independent=True
+        )
     else:
         return abort(404)
 
