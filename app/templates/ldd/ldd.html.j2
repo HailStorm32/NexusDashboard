@@ -1127,7 +1127,7 @@
   // already done; pre-built models count when their OBJ loads or their MTL/OBJ fails.
   const loadingIndicator = document.createElement('div')
   loadingIndicator.id = 'loading-progress'
-  loadingIndicator.style.cssText = 'position:fixed;top:8px;left:8px;padding:4px 8px;background:rgba(0,0,0,0.6);color:#fff;font:14px sans-serif;border-radius:4px;z-index:10;pointer-events:none;transition:opacity 1s'
+  loadingIndicator.style.cssText = 'position:fixed;top:8px;left:8px;padding:4px 8px;background:rgba(20,20,20,0.93);color:#fff;font:bold 14px sans-serif;border:1px solid rgba(255,255,255,0.35);border-radius:4px;text-shadow:0 1px 2px rgba(0,0,0,0.8);box-shadow:0 1px 4px rgba(0,0,0,0.5);z-index:10;pointer-events:none;transition:opacity 1s'
   document.body.appendChild(loadingIndicator)
   let modelsTotal = 0, modelsDone = 0, modelsFailed = 0
   let progressPending = false
@@ -1163,9 +1163,9 @@
     modelsLoading = false
     if (loadRenderTimer) { clearTimeout(loadRenderTimer); loadRenderTimer = null }
     loadingIndicator.textContent = progressText()
-    loadingIndicator.style.background = modelsFailed ? 'rgba(140,60,0,0.7)' : 'rgba(0,100,0,0.7)'
+    loadingIndicator.style.background = modelsFailed ? 'rgba(170,70,0,0.94)' : 'rgba(0,105,40,0.94)'
     // Keep the completion state visible briefly, then fade to a faint badge
-    setTimeout(function () { loadingIndicator.style.opacity = '0.35' }, 3000)
+    setTimeout(function () { loadingIndicator.style.opacity = '0.7' }, 3000)
     requestRender()
   }
 
