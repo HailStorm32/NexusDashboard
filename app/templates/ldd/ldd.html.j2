@@ -1122,10 +1122,31 @@
   let modelsLoading = true
   let lastLoadRender = 0
   let loadRenderTimer = null
+  // Progress indicator (a DOM element, so updating it never redraws the canvas).
+  // Counts models: LDD (lxfml) models are loaded synchronously above, so they are
+  // already done; pre-built models count when their OBJ loads or their MTL/OBJ fails.
   const loadingIndicator = document.createElement('div')
-  loadingIndicator.textContent = 'Loading models...'
-  loadingIndicator.style.cssText = 'position:fixed;top:8px;left:8px;padding:4px 8px;background:rgba(0,0,0,0.6);color:#fff;font:14px sans-serif;border-radius:4px;z-index:10'
+  loadingIndicator.id = 'loading-progress'
+  loadingIndicator.style.cssText = 'position:fixed;top:8px;left:8px;padding:4px 8px;background:rgba(0,0,0,0.6);color:#fff;font:14px sans-serif;border-radius:4px;z-index:10;pointer-events:none;transition:opacity 1s'
   document.body.appendChild(loadingIndicator)
+  let modelsTotal = 0, modelsDone = 0, modelsFailed = 0
+  let progressPending = false
+  function progressText() {
+    let pct = modelsTotal ? Math.floor(modelsDone / modelsTotal * 100) : 100
+    let failed = modelsFailed ? ' (' + modelsFailed + ' failed)' : ''
+    return (modelsLoading ? 'Loading models: ' : 'Loaded ') + pct + '% (' + modelsDone + '/' + modelsTotal + ')' + failed
+  }
+  function updateProgress() {
+    // Batch DOM updates to one per animation frame
+    if (progressPending) return
+    progressPending = true
+    requestAnimationFrame(function () { progressPending = false; loadingIndicator.textContent = progressText() })
+  }
+  function modelDone(failed) {
+    modelsDone++
+    if (failed) modelsFailed++
+    updateProgress()
+  }
 
   function loadProgressRender() {
     if (!modelsLoading) return requestRender()
@@ -1141,7 +1162,10 @@
   function loadsFinished() {
     modelsLoading = false
     if (loadRenderTimer) { clearTimeout(loadRenderTimer); loadRenderTimer = null }
-    loadingIndicator.style.display = 'none'
+    loadingIndicator.textContent = progressText()
+    loadingIndicator.style.background = modelsFailed ? 'rgba(140,60,0,0.7)' : 'rgba(0,100,0,0.7)'
+    // Keep the completion state visible briefly, then fade to a faint badge
+    setTimeout(function () { loadingIndicator.style.opacity = '0.35' }, 3000)
     requestRender()
   }
 
@@ -1149,7 +1173,7 @@
   // (successful or failed) have finished.
   let loadsStarted = false
   const loadingManager = new THREE.LoadingManager(loadsFinished, loadProgressRender, loadProgressRender)
-  loadingManager.onStart = function () { loadsStarted = true; modelsLoading = true; loadingIndicator.style.display = '' }
+  loadingManager.onStart = function () { loadsStarted = true; modelsLoading = true; loadingIndicator.style.opacity = '1' }
 
   // Load in pre-built models
   let obj_file_list = [
@@ -1159,6 +1183,10 @@
       {% endif %}
     {% endfor %}
   ]
+
+  modelsTotal = obj_file_list.length + lxfml_file_list.length
+  modelsDone = lxfml_file_list.length
+  loadingIndicator.textContent = progressText()
 
   for (let i = 0; i < obj_file_list.length; i++) {
     let mtlLoader = new MTLLoader(loadingManager);
@@ -1187,9 +1215,10 @@
 
             scene.add( newModel );
           };
+          modelDone(false)
           loadProgressRender()
-        }, onProgress, onError );
-    });
+        }, onProgress, function (error) { modelDone(true); onError(error) } );
+    }, undefined, function (error) { modelDone(true); onError(error) });
   }
 
   // Three.JS stuff
