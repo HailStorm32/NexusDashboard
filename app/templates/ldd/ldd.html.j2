@@ -521,6 +521,8 @@
 
     constructor(){
       this.allMaterials = ''
+      // brick geometry is shared by every UGC model converted by this converter
+      this.geometryCache = {}
       this.scene = new Scene()
     }
 
@@ -546,14 +548,18 @@
     // using the position/rotation stored for the model (properties_contents).
     Export(filename, positions = []){
       let modelGroup = new THREE.Group()
-      let allMaterials = new Materials(this.database.filelist['Materials.xml'].read())
+      // reuse the Materials.xml parsed once in LoadDBURL
+      if (!this.allMaterials) {
+        this.allMaterials = new Materials(this.database.filelist['Materials.xml'].read())
+      }
+      let allMaterials = this.allMaterials
       let invert = new Matrix3D()
       //invert.n33 = -1 //uncomment to invert the Z-Axis
 
       let indexOffset = 1
       let textOffset = 1
       let usedmaterials = []
-      let geometriecache = {}
+      let geometriecache = this.geometryCache
 
       let total = this.scene.Bricks.length
       let current = 0
@@ -1092,7 +1098,23 @@
 
   const onError = function (error) {
     console.log(error)
+    requestRender()
    };
+
+  // Render on demand: only draw when something changed (a load finished,
+  // the camera moved or the window resized), at most once per animation frame.
+  let renderPending = false
+  function requestRender() {
+    if (renderPending) return
+    renderPending = true
+    requestAnimationFrame(function () {
+      renderPending = false
+      renderer.render(scene, camera)
+    })
+  }
+
+  // Shared by the model/texture loaders so finished loads trigger a render
+  const loadingManager = new THREE.LoadingManager(requestRender, requestRender, requestRender)
 
   // Load in pre-built models
   let obj_file_list = [
@@ -1104,11 +1126,11 @@
   ]
 
   for (let i = 0; i < obj_file_list.length; i++) {
-    let mtlLoader = new MTLLoader();
+    let mtlLoader = new MTLLoader(loadingManager);
     mtlLoader.load( obj_file_list[i].mtl, function( materials ) {
 
         materials.preload();
-        let objLoader = new OBJLoader();
+        let objLoader = new OBJLoader(loadingManager);
         objLoader.setMaterials( materials );
 
         objLoader.load( obj_file_list[i].obj, function ( object ) {
@@ -1130,6 +1152,7 @@
 
             scene.add( newModel );
           };
+          requestRender()
         }, onProgress, onError );
     });
   }
@@ -1149,7 +1172,7 @@
 
   {% if center %}
     let center = new THREE.Vector3{{ center }};
-    let groundTexture = new THREE.TextureLoader().load( "{{url_for('luclient.get_dds_as_png', filename='env_nim_ag_grass.dds')}}");
+    let groundTexture = new THREE.TextureLoader(loadingManager).load( "{{url_for('luclient.get_dds_as_png', filename='env_nim_ag_grass.dds')}}");
     groundTexture.wrapS = groundTexture.wrapT = THREE.RepeatWrapping;
     groundTexture.repeat.set( 10, 10 );
     groundTexture.anisotropy = 16;
@@ -1192,13 +1215,16 @@
   controls.update()
   // if ( vnh ) vnh.update();
 
-  let render = function () {
-    requestAnimationFrame(render);
-    // camera.rotation.z += 0.01;
-    renderer.render(scene, camera);
-  };
+  controls.addEventListener('change', requestRender)
 
-  render();
+  window.addEventListener('resize', function () {
+    camera.aspect = window.innerWidth / window.innerHeight
+    camera.updateProjectionMatrix()
+    renderer.setSize(window.innerWidth, window.innerHeight)
+    requestRender()
+  })
+
+  requestRender();
 </script>
 
 </body>

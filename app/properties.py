@@ -16,6 +16,7 @@ import time
 from app.models import Property, db, UGC, CharacterInfo, PropertyContent, Account, Mail
 from app import gm_level, log_audit
 from app.luclient import query_cdclient
+from app.compressed_files import serve_bytes, serve_file
 from app.forms import RejectPropertyForm
 
 import zlib
@@ -378,13 +379,19 @@ def get_model(id, file_format, lod):
     content = PropertyContent.query.filter(PropertyContent.id == id).first()
     if not(0 <= int(lod) <= 2):
         abort(404)
+    # Large model files: let the browser keep a copy but always revalidate it
+    # (cheap 304 via the ETag) instead of storing long-lived entries.
+    cache_control = "private, no-cache"
     if content.lot == 14:  # ugc model
-        response = ugc(content)[0]
+        ugc_data = UGC.query.filter(UGC.id == content.ugc_id).first()
+        return serve_bytes(
+            decompress(ugc_data.lxfml), 'text/xml', cache_control, etag_seed=ugc_data.lxfml
+        )
     else:  # prebuilt model
-        response = prebuilt(content, file_format, lod)[0]
-
-    response.headers.set('Content-Type', 'text/xml')
-    return response
+        path = prebuilt_path(content, file_format, lod)
+        if not isinstance(path, pathlib.Path):
+            return path
+        return serve_file(path, 'text/xml', cache_control)
 
 
 @property_blueprint.route('/download_model/<id>', methods=['GET'])
@@ -434,7 +441,7 @@ def render_asset_basename(render_asset):
     return name.split(".")[0].lower()
 
 
-def prebuilt(content, file_format, lod):
+def prebuilt_path(content, file_format, lod):
     # translate LOT to component id
     # we need to get a type of 2 for the render component to find the filename
     render_component_id = query_cdclient(
@@ -458,11 +465,7 @@ def prebuilt(content, file_format, lod):
     # if we just want the lxfml, fine t and return it
     lxfml = pathlib.Path(f'{current_app.config["CLIENT_LOCATION"]}res/BrickModels/{filename.split(".")[0]}.lxfml')
     if file_format == "lxfml":
-
-        with open(lxfml, 'r') as file:
-            lxfml_data = file.read()
-        response = make_response(lxfml_data)
-
+        return lxfml
     # else we handle getting the files for lddviewer
     elif file_format in ["obj", "mtl"]:
         # check to see if the file exists
@@ -474,13 +477,16 @@ def prebuilt(content, file_format, lod):
                 ldd.main(str(lxfml.as_posix()), str(cache.with_suffix("").as_posix()), lod)  # convert to OBJ
             except Exception as e:
                 current_app.logger.error(f"ERROR on {cache}:\n {e}")
-        # then just read it
-        with open(str(cache.as_posix()), 'r') as file:
-            cache_data = file.read()
-        # and serve it
-        response = make_response(cache_data)
-
+        return cache
     else:
         raise(Exception("INVALID FILE FORMAT"))
 
-    return response, f"{filename}.{file_format}"
+
+def prebuilt(content, file_format, lod):
+    path = prebuilt_path(content, file_format, lod)
+    if not isinstance(path, pathlib.Path):
+        return path
+    with open(path, 'r') as file:
+        response = make_response(file.read())
+
+    return response, path.name

@@ -10,6 +10,7 @@ from flask_user import user_registered, current_user, user_logged_in
 from flask_wtf.csrf import CSRFProtect
 from flask_apscheduler import APScheduler
 from app.luclient import register_luclient_jinja_helpers
+from app.compressed_files import register_compressed_files
 import pathlib
 import shutil
 import stat
@@ -111,6 +112,7 @@ def create_app():
 
     register_logging(app)
     register_settings(app)
+    register_compressed_files(app)
     register_extensions(app)
     register_blueprints(app)
     register_luclient_jinja_helpers(app)
@@ -364,6 +366,13 @@ def register_settings(app):
         'ENABLE_CHAR_XML_UPLOAD',
         app.config['ENABLE_CHAR_XML_UPLOAD']
     )
+
+    # Property model viewer compression (see settings_example.py)
+    for key, default in (("COMPRESS_MODEL_RESPONSES", True), ("CACHE_COMPRESSED_MODELS", False)):
+        value = os.getenv(key, app.config.get(key, default))
+        if isinstance(value, str):
+            value = value.strip().lower() in ("1", "true", "yes", "on")
+        app.config[key] = bool(value)
 
     if "CLIENT_LOCATION" not in app.config:
         app.config['CLIENT_LOCATION'] = 'app/luclient/'
