@@ -188,8 +188,13 @@ def serve_bytes(data, mimetype, cache_control, etag_seed=None):
     """Serve in-memory data (e.g. UGC lxfml from the database).
 
     ``etag_seed`` should be cheap, stable bytes identifying the content (for
-    example the stored compressed blob); defaults to ``data``.
+    example the stored compressed blob); defaults to ``data``. ``data`` may
+    be a callable producing the body, so a 304 can skip building it (this
+    requires ``etag_seed``).
     """
+    if callable(data):
+        if etag_seed is None:
+            data = data()
     if isinstance(data, str):
         data = data.encode()
     base_etag = hashlib.sha1(
@@ -203,6 +208,10 @@ def serve_bytes(data, mimetype, cache_control, etag_seed=None):
     if early is not None:
         return early
 
+    if callable(data):
+        data = data()
+    if isinstance(data, str):
+        data = data.encode()
     if gz:
         data = gzip.compress(data, compresslevel=ON_THE_FLY_LEVEL, mtime=0)
     response = Response(data, mimetype=mimetype)

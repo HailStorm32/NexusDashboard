@@ -279,7 +279,11 @@
 
     AddScene(file){
       let lxfmlfile = new DBURLFile(file,file)
-      this.xmldata = lxfmlfile.read()
+      this.AddSceneData(lxfmlfile.read())
+    }
+
+    AddSceneData(xmldata){
+      this.xmldata = xmldata
 
       if (this.xmldata === ""){
         alert(this.xmldata)
@@ -961,7 +965,25 @@
       this.name = name
     }
 
+    // Fetch the file asynchronously (once) and keep it for read().
+    load() {
+      if (!this.loading) {
+        this.loading = fetch(this.urlHandle).then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status + ' for ' + response.url)
+          return response.arrayBuffer()
+        }).then((buffer) => {
+          this.content = bytesToUserDefinedString(buffer)
+        }).catch((error) => {
+          console.log('Error loading', this.urlHandle, error)
+          this.content = ''
+        })
+      }
+      return this.loading
+    }
+
     read() {
+      // Prefetched by load(): no request needed
+      if (this.content !== undefined) return this.content
       let fileContent
       let self = this;
       let xhr = new XMLHttpRequest();
@@ -992,6 +1014,72 @@
     }
   }
 
+
+  // Same string the synchronous XHR with the 'x-user-defined' charset hack
+  // produced: ASCII bytes as-is, bytes >= 0x80 mapped to U+F780..U+F7FF.
+  function bytesToUserDefinedString(buffer) {
+    const bytes = new Uint8Array(buffer)
+    const chunk = 8192
+    let out = ''
+    for (let i = 0; i < bytes.length; i += chunk) {
+      const part = bytes.subarray(i, i + chunk)
+      const codes = new Array(part.length)
+      for (let j = 0; j < part.length; j++) {
+        const b = part[j]
+        codes[j] = b < 0x80 ? b : 0xF700 + b
+      }
+      out += String.fromCharCode.apply(null, codes)
+    }
+    return out
+  }
+
+  // Run fn over items with at most `limit` in flight at a time.
+  async function runLimited(items, limit, fn) {
+    let next = 0
+    async function worker() {
+      while (next < items.length) {
+        const item = items[next++]
+        await fn(item)
+      }
+    }
+    const workers = []
+    for (let i = 0; i < Math.min(limit, items.length); i++) workers.push(worker())
+    await Promise.all(workers)
+  }
+
+  const FETCH_CONCURRENCY = 8
+
+  // Asynchronous version of DBURLReader: lists the brick database and
+  // prefetches info.xml / Materials.xml without blocking the main thread.
+  async function loadDBURLReader(dburl) {
+    const reader = Object.create(DBURLReader.prototype)
+    reader.filelist = {}
+    reader.initok = false
+    reader.location = dburl
+    reader.dbinfo = ''
+    async function parse(url) {
+      const response = await fetch(url)
+      if (!response.ok) {
+        console.log('HTTP error', response.status, response.statusText)
+        return
+      }
+      const data = await response.json()
+      const subdirs = []
+      for (const obj of data) {
+        if (obj.type == 'directory') subdirs.push(url + obj.name + '/')
+        else if (obj.type == 'file') reader.filelist[obj.name] = new DBURLFile(url + obj.name, obj.name)
+        else console.log('Strange object parsed: ' + obj.type)
+      }
+      await Promise.all(subdirs.map(parse))
+    }
+    await parse(dburl)
+    if (reader.fileexist('Materials.xml') && reader.fileexist('info.xml')) {
+      await Promise.all([reader.filelist['Materials.xml'].load(), reader.filelist['info.xml'].load()])
+      reader.dbinfo = new DBinfo(reader.filelist['info.xml'].read())
+      reader.initok = true
+    }
+    return reader
+  }
 
   class DBURLReader {
     constructor(dburl) {
@@ -1062,27 +1150,126 @@
     {% for model in content %}
       {% if model.lot == 14 %}
         {
+          "id": {{ model.id|string|tojson }},
           "url": "{{url_for('properties.get_model', id=model.id, file_format='lxfml', lod=lod)}}",
           "pos": {{ model.pos|tojson }}
         },
       {% endif %}
     {% endfor %}
   ]
-  if (lxfml_file_list.length > 0) {
-  let ldddburl = FindDBURL()
+  // All UGC LXFML of a property in one request (view_models); otherwise per model
+  const ugcBatchUrl = {{ ugc_batch_url|default(none)|tojson }}
 
-    if (ldddburl) {
-      let converter = new Converter()
-      converter.LoadDBURL(ldddburl)
-      for (let i = 0; i < lxfml_file_list.length; i++) {
-        converter.LoadScene(lxfml_file_list[i].url)
-        converter.Export('test.webgl', lxfml_file_list[i].pos)
+  // Load the brick-built (UGC) models without blocking the page: fetch the
+  // LXFML (batched), then each needed brick primitive once with bounded
+  // concurrency, then build the meshes in small slices so the progress badge
+  // keeps updating.
+  async function loadUGCModels() {
+    if (lxfml_file_list.length === 0) return
+    let built = 0
+    try {
+      setProgressDetail('brick database')
+      const database = await loadDBURLReader('/luclient/ldddb/')
+      if (!database.initok) {
+        alert("LDD database not available. Please look for LEGO-Digital-Designer database.")
+        throw new Error('LDD database not available')
+      }
+      const converter = new Converter()
+      converter.database = database
+      converter.allMaterials = new Materials(database.filelist['Materials.xml'].read())
+
+      setProgressDetail('model files')
+      let texts
+      if (ugcBatchUrl) {
+        const response = await fetch(ugcBatchUrl)
+        if (!response.ok) throw new Error('HTTP ' + response.status + ' for ' + ugcBatchUrl)
+        const data = await response.json()
+        texts = lxfml_file_list.map(function (m) { return data[m.id] })
+      } else {
+        texts = new Array(lxfml_file_list.length)
+        await runLimited(lxfml_file_list.map(function (m, i) { return i }), FETCH_CONCURRENCY, async function (i) {
+          try {
+            const response = await fetch(lxfml_file_list[i].url)
+            if (response.ok) texts[i] = bytesToUserDefinedString(await response.arrayBuffer())
+          } catch (error) { console.log(error) }
+        })
       }
 
+      let lastYield = performance.now()
+      async function maybeYield() {
+        if (performance.now() - lastYield > 30) {
+          await new Promise(function (resolve) { setTimeout(resolve) })
+          lastYield = performance.now()
+        }
+      }
+
+      // parse the scenes and collect the bricks they use
+      const scenes = []
+      for (let i = 0; i < texts.length; i++) {
+        let parsed = null
+        if (texts[i]) {
+          try { parsed = new Scene(); parsed.AddSceneData(texts[i]) } catch (error) { console.log(error); parsed = null }
+        }
+        scenes.push(parsed)
+        await maybeYield()
+      }
+      const files = new Set()
+      const lod = {{ lod }}
+      for (const parsed of scenes) {
+        if (!parsed) continue
+        for (const brick of parsed.Bricks) {
+          for (const part of brick.Parts) {
+            let n = 0
+            let location = `brickprimitives/lod${lod}/${part.designID}.g`
+            while (location in database.filelist) {
+              files.add(database.filelist[location])
+              n += 1
+              location = `brickprimitives/lod${lod}/${part.designID}.g${n}`
+            }
+            const primitive = database.filelist[`Primitives/${part.designID}.xml`]
+            if (primitive) files.add(primitive)
+          }
+        }
+      }
+      // each primitive is fetched once (Set + DBURLFile.load() caching)
+      const fileList = Array.from(files)
+      let fetched = 0
+      setProgressDetail('bricks 0/' + fileList.length)
+      await runLimited(fileList, FETCH_CONCURRENCY, async function (file) {
+        await file.load()
+        fetched += 1
+        setProgressDetail('bricks ' + fetched + '/' + fileList.length)
+      })
+      setProgressDetail('')
+
+      // build the meshes
+      for (let i = 0; i < scenes.length; i++) {
+        built += 1
+        if (!scenes[i]) { modelDone(true); continue }
+        try {
+          converter.scene = scenes[i]
+          converter.Export('test.webgl', lxfml_file_list[i].pos)
+          modelDone(false)
+        } catch (error) {
+          console.log(error)
+          modelDone(true)
+        }
+        if (performance.now() - lastYield > 30) {
+          loadProgressRender()
+          await maybeYield()
+        }
+      }
+    } catch (error) {
+      console.log(error)
+      // whatever was not built counts as failed
+      for (; built < lxfml_file_list.length; built++) modelDone(true)
     }
-    else {
-      alert("LDD database not available. Please look for LEGO-Digital-Designer database.")
-    }
+    setProgressDetail('')
+    {% if not center and not content|length > 1 %}
+      // the camera follows the brick-built model, now that its position is known
+      camera.position.set( brick_pos.x + 200, brick_pos.y + 300, brick_pos.z + 200 );
+      controls.update()
+    {% endif %}
   }
 
   const onProgress = function ( xhr ) {
@@ -1123,18 +1310,24 @@
   let lastLoadRender = 0
   let loadRenderTimer = null
   // Progress indicator (a DOM element, so updating it never redraws the canvas).
-  // Counts models: LDD (lxfml) models are loaded synchronously above, so they are
-  // already done; pre-built models count when their OBJ loads or their MTL/OBJ fails.
+  // Counts models: brick-built (lxfml) models count once their meshes are built,
+  // pre-built models when their OBJ loads or their MTL/OBJ fails.
   const loadingIndicator = document.createElement('div')
   loadingIndicator.id = 'loading-progress'
   loadingIndicator.style.cssText = 'position:fixed;top:8px;left:8px;padding:4px 8px;background:rgba(20,20,20,0.93);color:#fff;font:bold 14px sans-serif;border:1px solid rgba(255,255,255,0.35);border-radius:4px;text-shadow:0 1px 2px rgba(0,0,0,0.8);box-shadow:0 1px 4px rgba(0,0,0,0.5);z-index:10;pointer-events:none;transition:opacity 1s'
   document.body.appendChild(loadingIndicator)
   let modelsTotal = 0, modelsDone = 0, modelsFailed = 0
   let progressPending = false
+  let progressDetail = ''
   function progressText() {
     let pct = modelsTotal ? Math.floor(modelsDone / modelsTotal * 100) : 100
     let failed = modelsFailed ? ' (' + modelsFailed + ' failed)' : ''
-    return (modelsLoading ? 'Loading models: ' : 'Loaded ') + pct + '% (' + modelsDone + '/' + modelsTotal + ')' + failed
+    let detail = (modelsLoading && progressDetail) ? ' \u2013 ' + progressDetail : ''
+    return (modelsLoading ? 'Loading models: ' : 'Loaded ') + pct + '% (' + modelsDone + '/' + modelsTotal + ')' + failed + detail
+  }
+  function setProgressDetail(text) {
+    progressDetail = text
+    updateProgress()
   }
   function updateProgress() {
     // Batch DOM updates to one per animation frame
@@ -1159,6 +1352,14 @@
     }, wait)
   }
 
+  // Done once both the loading manager (pre-built models, ground texture) and
+  // the brick-built models have finished.
+  let managerDone = false
+  let ugcDone = lxfml_file_list.length === 0
+  function partFinished() {
+    if (managerDone && ugcDone && modelsLoading) loadsFinished()
+  }
+
   function loadsFinished() {
     modelsLoading = false
     if (loadRenderTimer) { clearTimeout(loadRenderTimer); loadRenderTimer = null }
@@ -1172,8 +1373,8 @@
   // Shared by the model/texture loaders; onLoad fires once all queued items
   // (successful or failed) have finished.
   let loadsStarted = false
-  const loadingManager = new THREE.LoadingManager(loadsFinished, loadProgressRender, loadProgressRender)
-  loadingManager.onStart = function () { loadsStarted = true; modelsLoading = true; loadingIndicator.style.opacity = '1' }
+  const loadingManager = new THREE.LoadingManager(function () { managerDone = true; partFinished() }, loadProgressRender, loadProgressRender)
+  loadingManager.onStart = function () { loadsStarted = true; managerDone = false; loadingIndicator.style.opacity = '1' }
 
   // Load in pre-built models
   let obj_file_list = [
@@ -1185,7 +1386,7 @@
   ]
 
   modelsTotal = obj_file_list.length + lxfml_file_list.length
-  modelsDone = lxfml_file_list.length
+  modelsDone = 0
   loadingIndicator.textContent = progressText()
 
   for (let i = 0; i < obj_file_list.length; i++) {
@@ -1288,8 +1489,10 @@
     requestRender()
   })
 
-  // Nothing to fetch (e.g. only brick-built models, which load synchronously)
-  if (!loadsStarted) loadsFinished()
+  // Nothing queued on the loading manager (e.g. only brick-built models)
+  if (!loadsStarted) managerDone = true
+  loadUGCModels().then(function () { ugcDone = true; partFinished() })
+  partFinished()
   requestRender();
 </script>
 

@@ -20,6 +20,8 @@ from app.compressed_files import serve_bytes, serve_file
 from app.forms import RejectPropertyForm
 
 import zlib
+import json
+import hashlib
 import app.pylddlib as ldd
 import pathlib
 
@@ -390,6 +392,7 @@ def view_models(id, lod):
         content=consolidated_list,
         center=property_center[property_data.zone_id],
         lod=lod,
+        ugc_batch_url=url_for('properties.get_ugc_models', id=id),
         **viewer_redraw_options()
     )
 
@@ -405,8 +408,9 @@ def get_model(id, file_format, lod):
     cache_control = "private, no-cache"
     if content.lot == 14:  # ugc model
         ugc_data = UGC.query.filter(UGC.id == content.ugc_id).first()
+        # decompress lazily so a matching If-None-Match skips the work
         return serve_bytes(
-            decompress(ugc_data.lxfml), 'text/xml', cache_control,
+            lambda: decompress(ugc_data.lxfml), 'text/xml', cache_control,
             etag_seed=ugc_data.lxfml
         )
     else:  # prebuilt model
@@ -414,6 +418,38 @@ def get_model(id, file_format, lod):
         if not isinstance(path, pathlib.Path):
             return path
         return serve_file(path, 'text/xml', cache_control)
+
+
+@property_blueprint.route('/get_ugc_models/<id>', methods=['GET'])
+@login_required
+def get_ugc_models(id):
+    """All UGC (brick-built) LXFML of a property in one JSON response.
+
+    Returns ``{"<property content id>": "<lxfml>", ...}`` so the viewer does
+    not need one request per model (a property can have hundreds).
+    """
+    rows = db.session.query(PropertyContent.id, UGC.lxfml).join(
+        UGC, UGC.id == PropertyContent.ugc_id
+    ).filter(
+        PropertyContent.property_id == id, PropertyContent.lot == 14
+    ).order_by(PropertyContent.id).all()
+
+    # ETag over the whole set: content ids plus the stored (compressed) blobs
+    seed = hashlib.sha1()
+    for content_id, lxfml in rows:
+        seed.update(f"{content_id}:{len(lxfml)}:".encode())
+        seed.update(lxfml)
+
+    def body():
+        return json.dumps({
+            str(content_id): decompress(lxfml).decode("utf-8", "replace")
+            for content_id, lxfml in rows
+        })
+
+    return serve_bytes(
+        body, 'application/json', "private, no-cache",
+        etag_seed=seed.digest()
+    )
 
 
 @property_blueprint.route('/download_model/<id>', methods=['GET'])
