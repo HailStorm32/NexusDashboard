@@ -1319,10 +1319,12 @@
   let modelsTotal = 0, modelsDone = 0, modelsFailed = 0
   let progressPending = false
   let progressDetail = ''
+  let prebuiltDetail = ''
   function progressText() {
     let pct = modelsTotal ? Math.floor(modelsDone / modelsTotal * 100) : 100
     let failed = modelsFailed ? ' (' + modelsFailed + ' failed)' : ''
-    let detail = (modelsLoading && progressDetail) ? ' \u2013 ' + progressDetail : ''
+    let parts = [prebuiltDetail, progressDetail].filter(Boolean).join(', ')
+    let detail = (modelsLoading && parts) ? ' \u2013 ' + parts : ''
     return (modelsLoading ? 'Loading models: ' : 'Loaded ') + pct + '% (' + modelsDone + '/' + modelsTotal + ')' + failed + detail
   }
   function setProgressDetail(text) {
@@ -1389,10 +1391,19 @@
   modelsDone = 0
   loadingIndicator.textContent = progressText()
 
+  // Pre-built stage on the badge: materials arrive before any OBJ can load
+  let materialsLoaded = 0
+  function materialLoaded() {
+    materialsLoaded++
+    prebuiltDetail = materialsLoaded < obj_file_list.length ? 'materials ' + materialsLoaded + '/' + obj_file_list.length : ''
+    updateProgress()
+  }
+  if (obj_file_list.length) { prebuiltDetail = 'materials 0/' + obj_file_list.length; updateProgress() }
+
   for (let i = 0; i < obj_file_list.length; i++) {
     let mtlLoader = new MTLLoader(loadingManager);
     mtlLoader.load( obj_file_list[i].mtl, function( materials ) {
-
+        materialLoaded()
         materials.preload();
         let objLoader = new OBJLoader(loadingManager);
         objLoader.setMaterials( materials );
@@ -1419,7 +1430,7 @@
           modelDone(false)
           loadProgressRender()
         }, onProgress, function (error) { modelDone(true); onError(error) } );
-    }, undefined, function (error) { modelDone(true); onError(error) });
+    }, undefined, function (error) { materialLoaded(); modelDone(true); onError(error) });
   }
 
   // Three.JS stuff
